@@ -104,6 +104,15 @@ async function trySqlJs() {
 }
 
 async function initAdapter() {
+  // Postgres mode: when a cloud connection string is present, skip SQLite entirely.
+  if (process.env.DATABASE_URL || process.env.SUPABASE_DB_URL) {
+    const { createPgAdapter } = await import("./adapters/pgAdapter.js");
+    const adapter = await createPgAdapter();
+    const { runMigrationOnce } = await import("./migrate.js");
+    await runMigrationOnce(adapter);
+    return adapter;
+  }
+
   ensureDirs();
   const existingDatabase = await verifyDatabaseIntegrity(DATA_FILE);
   // Native drivers understand WAL; sql.js may only initialize a new database.

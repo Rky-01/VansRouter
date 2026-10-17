@@ -31,13 +31,13 @@ function rowToKey(row) {
 
 export async function getApiKeys() {
   const db = await getAdapter();
-  const rows = db.all(`SELECT * FROM apiKeys ORDER BY createdAt ASC`);
+  const rows = await db.all(`SELECT * FROM apiKeys ORDER BY createdAt ASC`);
   return rows.map(rowToKey);
 }
 
 export async function getApiKeyById(id) {
   const db = await getAdapter();
-  const row = db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
+  const row = await db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
   return rowToKey(row);
 }
 
@@ -59,7 +59,7 @@ export async function createApiKey(name, machineId) {
     allowedCombos: null,
     allowedKinds: null,
   };
-  db.run(
+  await db.run(
     `INSERT INTO apiKeys(id, key, name, machineId, isActive, createdAt, allowedProviders, allowedCombos, allowedKinds) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [apiKey.id, apiKey.key, apiKey.name, apiKey.machineId, 1, apiKey.createdAt, null, null, null]
   );
@@ -69,8 +69,8 @@ export async function createApiKey(name, machineId) {
 export async function updateApiKey(id, data) {
   const db = await getAdapter();
   let result = null;
-  db.transaction(() => {
-    const row = db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
+  await db.transaction(async () => {
+    const row = await db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
     if (!row) return;
     const current = rowToKey(row);
     // Merge: only override fields explicitly present in data
@@ -80,7 +80,7 @@ export async function updateApiKey(id, data) {
     if ("allowedProviders" in data) merged.allowedProviders = data.allowedProviders;
     if ("allowedCombos" in data) merged.allowedCombos = data.allowedCombos;
     if ("allowedKinds" in data) merged.allowedKinds = data.allowedKinds;
-    db.run(
+    await db.run(
       `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ?, allowedProviders = ?, allowedCombos = ?, allowedKinds = ? WHERE id = ?`,
       [
         merged.key,
@@ -100,13 +100,13 @@ export async function updateApiKey(id, data) {
 
 export async function deleteApiKey(id) {
   const db = await getAdapter();
-  const res = db.run(`DELETE FROM apiKeys WHERE id = ?`, [id]);
+  const res = await db.run(`DELETE FROM apiKeys WHERE id = ?`, [id]);
   return (res?.changes ?? 0) > 0;
 }
 
 export async function validateApiKey(key) {
   const db = await getAdapter();
-  const row = db.get(`SELECT * FROM apiKeys WHERE key = ?`, [key]);
+  const row = await db.get(`SELECT * FROM apiKeys WHERE key = ?`, [key]);
   if (!row || row.isActive !== 1 && row.isActive !== true) return null;
   return rowToKey(row);
 }

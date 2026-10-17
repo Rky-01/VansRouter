@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { LEGACY_FILES, DB_DIR } from "./paths.js";
-import { TABLES, buildCreateTableSql, SCHEMA_VERSION } from "./schema.js";
+import { TABLES, buildCreateTableSql, buildPostgresCreateTableSql, SCHEMA_VERSION } from "./schema.js";
 import { MIGRATIONS, latestVersion } from "./migrations/index.js";
 import { getMetaSync, setMetaSync } from "./helpers/metaStore.js";
 import { makeBackupDir, backupFile, backupDbLite, pruneOldBackups } from "./backup.js";
@@ -216,6 +216,14 @@ function importLegacyDetails(adapter, data) {
 export async function runMigrationOnce(adapter) {
   if (_migratedAdapters.has(adapter)) return;
 
+  // Postgres/cloud mode: schema is created declaratively (no SQLite migrations,
+  // no file backups — Supabase owns durability). Additive column/index sync only.
+  if (adapter.driver === "postgres") {
+    await runPostgresMigration(adapter);
+    _migratedAdapters.add(adapter);
+    return;
+  }
+
   // Capture freshness BEFORE migrations stamp _meta (otherwise we'd misclassify
   // a brand-new DB as non-fresh once schemaVersion is written).
   const fresh = isFreshDb(adapter);
@@ -296,4 +304,49 @@ export async function runMigrationOnce(adapter) {
   const oldVer = getMetaSync(adapter, "appVersion", null);
   if (oldVer !== newVer) setMetaSync(adapter, "appVersion", newVer);
   _migratedAdapters.add(adapter);
+}
+
+// Postgres (cloud) schema sync. Not a versioned migration chain — the cloud DB
+// is created once from the declarative schema, then kept in sync additively.
+// Supabase handles durability/backups, so no local file backup is taken here.
+async function runPostgresMigration(adapter) {
+  for (const [tableName, def] of Object.entries(TABLES)) {
+    // Create table if absent (idempotent)
+    await adapter.exec(buildPostgresCreateTableSql(tableName, def));
+
+    // Diff columns via information_schema (no PRAGMA in Postgres). PG folds
+    // unquoted identifiers to lowercase, so compare case-insensitively.
+    const existing = (
+      await adapter.all(
+        `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = lower(?)`,
+        [tableName]
+      )
+    ).map((r) => r.column_name.toLowerCase());
+    for (const [colName, colDef] of Object.entries(def.columns)) {
+      if (!existing.includes(colName.toLowerCase())) {
+        const safeDef = colDef.replace(/PRIMARY KEY( AUTOINCREMENT)?/i, "").replace(/UNIQUE/i, "").trim();
+        try {
+          await adapter.exec(`ALTER TABLE ${tableName} ADD COLUMN ${colName} ${safeDef}`);
+          console.log(`[DB][sync] +column ${tableName}.${colName}`);
+        } catch (e) {
+          console.warn(`[DB][sync] add column ${tableName}.${colName} failed: ${e.message}`);
+        }
+      }
+    }
+
+    // Indexes (idempotent)
+    for (const idx of def.indexes || []) {
+      try { await adapter.exec(idx); } catch {}
+    }
+  }
+
+  // Stamp versions in _meta (same keys the SQLite flow reads later).
+  const stamp = (k, v) =>
+    adapter.run(
+      `INSERT INTO _meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      [k, String(v)]
+    );
+  await stamp("schemaVersion", latestVersion());
+  await stamp("backupSchemaVersion", SCHEMA_VERSION);
+  await stamp("appVersion", getAppVersion());
 }

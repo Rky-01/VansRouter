@@ -4,7 +4,7 @@ import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 export async function getCachedProviderModels() {
   const db = await getAdapter();
   try {
-    const rows = db.all(`SELECT providerId, modelId, kind, ownedBy, capabilities, updatedAt FROM cachedProviderModels`);
+    const rows = await db.all(`SELECT providerId, modelId, kind, ownedBy, capabilities, updatedAt FROM cachedProviderModels`);
     return rows.map((r) => ({
       id: r.modelId.includes("/") ? r.modelId : `${r.ownedBy}/${r.modelId}`,
       object: "model",
@@ -31,7 +31,7 @@ export async function saveCachedProviderModels(models) {
       capabilities = excluded.capabilities,
       updatedAt = excluded.updatedAt
   `;
-  db.transaction(() => {
+  await db.transaction(async () => {
     for (const m of models) {
       if (!m?.id) continue;
       const ownedBy = m.owned_by || (m.id.includes("/") ? m.id.split("/")[0] : "combo");
@@ -39,7 +39,7 @@ export async function saveCachedProviderModels(models) {
       const modelId = m.id;
       const kind = m.kind || "llm";
       const caps = m.capabilities ? stringifyJson(m.capabilities) : null;
-      db.run(sql, [providerId, modelId, kind, ownedBy, caps, now]);
+      await db.run(sql, [providerId, modelId, kind, ownedBy, caps, now]);
     }
   });
 }
@@ -48,7 +48,7 @@ export async function saveCachedProviderModels(models) {
 export async function clearCachedProviderModels() {
   const db = await getAdapter();
   try {
-    db.run(`DELETE FROM cachedProviderModels`);
+    await db.run(`DELETE FROM cachedProviderModels`);
   } catch {
     /* empty */
   }

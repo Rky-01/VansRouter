@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     const db = await getAdapter();
-    db.get("SELECT 1 AS ok");
+    await db.get("SELECT 1 AS ok");
     return Response.json(
       { ok: true, database: "ready" },
       { headers: { "Cache-Control": "no-store" } },
