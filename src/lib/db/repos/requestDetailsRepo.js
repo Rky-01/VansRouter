@@ -108,44 +108,53 @@ async function flushToDatabase() {
       const items = writeBuffer.splice(0, writeBuffer.length);
       const db = await getAdapter();
       const config = await getObservabilityConfig();
+      const isPg = db.driver === "postgres";
 
-      await db.transaction(async () => {
-        for (const item of items) {
-          if (!item.id) item.id = generateDetailId(item.model);
-          if (!item.timestamp) item.timestamp = new Date().toISOString();
-          if (item.request?.headers) item.request.headers = sanitizeHeaders(item.request.headers);
+      const runInsert = (db, record) => {
+        const sql = `INSERT INTO requestDetails(id, timestamp, provider, model, connectionId, apiKey, apiKeyName, status, data) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET timestamp = excluded.timestamp, provider = excluded.provider, model = excluded.model, connectionId = excluded.connectionId, apiKey = excluded.apiKey, apiKeyName = excluded.apiKeyName, status = excluded.status, data = excluded.data`;
+        const params = [record.id, record.timestamp, record.provider, record.model, record.connectionId, record.apiKey, record.apiKeyName, record.status, stringifyJson(record)];
+        return db.run(sql, params);
+      };
 
-          const record = {
-            id: item.id,
-            provider: item.provider || null,
-            model: item.model || null,
-            connectionId: item.connectionId || null,
-            apiKey: item.apiKey || null,
-            apiKeyName: item.apiKeyName || null,
-            timestamp: item.timestamp,
-            status: item.status || null,
-            latency: item.latency || {},
-            tokens: item.tokens || {},
-            request: truncateField(item.request, config.maxJsonSize),
-            providerRequest: truncateField(item.providerRequest, config.maxJsonSize),
-            providerResponse: truncateField(item.providerResponse, config.maxJsonSize),
-            response: truncateField(item.response, config.maxJsonSize),
-          };
-
-          await db.run(
-            `INSERT INTO requestDetails(id, timestamp, provider, model, connectionId, apiKey, apiKeyName, status, data) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET timestamp = excluded.timestamp, provider = excluded.provider, model = excluded.model, connectionId = excluded.connectionId, apiKey = excluded.apiKey, apiKeyName = excluded.apiKeyName, status = excluded.status, data = excluded.data`,
-            [record.id, record.timestamp, record.provider, record.model, record.connectionId, record.apiKey, record.apiKeyName, record.status, stringifyJson(record)]
-          );
-        }
-
-        const cnt = await db.get(`SELECT COUNT(*) as c FROM requestDetails`);
-        if (cnt && cnt.c > config.maxRecords) {
-          await db.run(
-            `DELETE FROM requestDetails WHERE id IN (SELECT id FROM requestDetails ORDER BY timestamp ASC LIMIT ?)`,
-            [cnt.c - config.maxRecords]
-          );
-        }
+      const preparedItems = items.map((item) => {
+        if (!item.id) item.id = generateDetailId(item.model);
+        if (!item.timestamp) item.timestamp = new Date().toISOString();
+        if (item.request?.headers) item.request.headers = sanitizeHeaders(item.request.headers);
+        return {
+          id: item.id,
+          provider: item.provider || null,
+          model: item.model || null,
+          connectionId: item.connectionId || null,
+          apiKey: item.apiKey || null,
+          apiKeyName: item.apiKeyName || null,
+          timestamp: item.timestamp,
+          status: item.status || null,
+          latency: item.latency || {},
+          tokens: item.tokens || {},
+          request: truncateField(item.request, config.maxJsonSize),
+          providerRequest: truncateField(item.providerRequest, config.maxJsonSize),
+          providerResponse: truncateField(item.providerResponse, config.maxJsonSize),
+          response: truncateField(item.response, config.maxJsonSize),
+        };
       });
+
+      if (isPg) {
+        await db.transaction(async () => {
+          for (const record of preparedItems) await runInsert(db, record);
+        });
+      } else {
+        db.transaction(() => {
+          for (const record of preparedItems) runInsert(db, record);
+        });
+      }
+
+      const cnt = await db.get(`SELECT COUNT(*) as c FROM requestDetails`);
+      if (cnt && cnt.c > config.maxRecords) {
+        await db.run(
+          `DELETE FROM requestDetails WHERE id IN (SELECT id FROM requestDetails ORDER BY timestamp ASC LIMIT ?)`,
+          [cnt.c - config.maxRecords]
+        );
+      }
     }
   } catch (e) {
     console.error("[requestDetailsRepo] Batch write failed:", e);
