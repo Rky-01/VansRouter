@@ -145,10 +145,10 @@ export async function createProviderConnection(data) {
     // inside providerSpecificData and have no single-column equivalent.
     const isApikey = data.authType === "apikey" && !!data.name;
     const all = isApikey
-      ? await db.all(
+      ? (await db.all(
           `SELECT * FROM providerConnections WHERE provider = ? AND authType = ? AND name = ?`,
           [data.provider, "apikey", data.name]
-        ).map(rowToConn)
+        )).map(rowToConn)
       : (await db.all(`SELECT * FROM providerConnections WHERE provider = ?`, [data.provider])).map(rowToConn);
     const poolSize = isApikey
       ? await db.get(`SELECT COUNT(*) AS n FROM providerConnections WHERE provider = ?`, [data.provider])?.n ?? all.length

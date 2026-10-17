@@ -52,7 +52,26 @@ export function createBetterSqliteAdapter(filePath) {
     get(sql, params = []) { return prepare(sql).get(...params); },
     all(sql, params = []) { return prepare(sql).all(...params); },
     exec(sql) { return db.exec(sql); },
-    transaction(fn) { return db.transaction(fn)(); },
+    transaction(fn) {
+      // better-sqlite3's db.transaction() rejects async callbacks. SQLite ops
+      // here are synchronous, so awaiting fn() drains its microtasks and every
+      // write still happens between BEGIN and COMMIT — atomicity is preserved.
+      db.exec("BEGIN");
+      try {
+        const r = fn();
+        if (r && typeof r.then === "function") {
+          return r.then(
+            (v) => { db.exec("COMMIT"); return v; },
+            (e) => { try { db.exec("ROLLBACK"); } catch {} throw e; }
+          );
+        }
+        db.exec("COMMIT");
+        return r;
+      } catch (e) {
+        try { db.exec("ROLLBACK"); } catch {}
+        throw e;
+      }
+    },
     checkpoint() { try { db.pragma("wal_checkpoint(TRUNCATE)"); } catch {} },
     close() {
       clearInterval(checkpointTimer);
