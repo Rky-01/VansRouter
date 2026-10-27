@@ -14,6 +14,8 @@ import {
   sortVisibleConnections,
   buildLoadingState,
   filterQuotaStateByConnections,
+  scopeConnectionsToProvider,
+  createLatestRequestTracker,
   getConnectionsEmptyMessage,
   getPageSizeLabel,
   getConnectionsPaginationSummary,
@@ -193,6 +195,7 @@ export default function ProviderLimits() {
       router.replace(newUrl, { scroll: false });
     } catch { /* non-fatal: URL sync is best-effort */ }
   }, [pathname, router, searchParams]);
+
   const [providerOptions, setProviderOptions] = useState([]);
   const [modelFilter, setModelFilter] = useState("all");
   const [accountFilter, setAccountFilter] = useState("all");
@@ -220,9 +223,19 @@ export default function ProviderLimits() {
   const intervalRef = useRef(null);
   const countdownRef = useRef(null);
   const tickCountRef = useRef(0);
+  const connectionsRequestsRef = useRef(createLatestRequestTracker());
+  const refreshingAllRef = useRef(false);
+
+  // The providerFilter initializer runs once; follow later URL changes so
+  // browser back/forward and direct navigation cannot leave a stale filter.
+  useEffect(() => {
+    const urlProvider = searchParams?.get("provider") || "all";
+    _setProviderFilter((current) => (current === urlProvider ? current : urlProvider));
+  }, [searchParams]);
 
   const fetchConnections = useCallback(
     async (targetPage = page) => {
+      const requestToken = connectionsRequestsRef.current.begin();
       try {
         const params = new URLSearchParams({
           page: String(targetPage),
@@ -237,10 +250,13 @@ export default function ProviderLimits() {
 
         const response = await fetch(
           `/api/providers/client?${params.toString()}`,
+          { cache: "no-store" },
         );
         if (!response.ok) throw new Error("Failed to fetch connections");
 
         const data = await response.json();
+        if (!connectionsRequestsRef.current.isLatest(requestToken)) return null;
+
         const connectionList = data.connections || [];
         const nextPagination = getSafePagination(data.pagination, pageSize);
         const nextTotals = getSafeTotals(data.totals, connectionList.length);
@@ -252,6 +268,7 @@ export default function ProviderLimits() {
         setPage(getPaginationPageValue(data.pagination, targetPage));
         return connectionList;
       } catch (error) {
+        if (!connectionsRequestsRef.current.isLatest(requestToken)) return null;
         console.error("Error fetching connections:", error);
         setConnections([]);
         setProviderOptions([]);
@@ -260,7 +277,7 @@ export default function ProviderLimits() {
         return [];
       }
     },
-    [accountFilter, expiringFirst, page, pageSize, providerFilter],
+    [accountFilter, page, pageSize, providerFilter],
   );
 
   // Fetch quota for a specific connection
@@ -272,7 +289,7 @@ export default function ProviderLimits() {
       console.log(
         `[ProviderLimits] Fetching quota for ${provider} (${connectionId})`,
       );
-      const response = await fetch(`/api/usage/${connectionId}${force ? "?force=1" : ""}`);
+      const response = await fetch(`/api/usage/${connectionId}${force ? "?force=1" : ""}`, { cache: "no-store" });
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -522,8 +539,9 @@ export default function ProviderLimits() {
   }, []);
 
   const refreshAll = useCallback(async (force = false) => {
-    if (refreshingAll) return;
+    if (refreshingAllRef.current) return;
 
+    refreshingAllRef.current = true;
     setRefreshingAll(true);
     setCountdown(60);
 
@@ -535,6 +553,7 @@ export default function ProviderLimits() {
 
     try {
       const visibleConnections = await fetchConnections(page);
+      if (!visibleConnections) return;
 
       setLoading(buildLoadingState(visibleConnections));
       setErrors((prev) =>
@@ -554,15 +573,19 @@ export default function ProviderLimits() {
     } catch (error) {
       console.error("Error refreshing all providers:", error);
     } finally {
+      refreshingAllRef.current = false;
       setRefreshingAll(false);
     }
-  }, [refreshingAll, fetchConnections, fetchQuota, page]);
+  }, [fetchConnections, fetchQuota, page]);
 
   useEffect(() => {
+    let cancelled = false;
     const initializeData = async () => {
       setConnectionsLoading(true);
       const visibleConnections = await fetchConnections(page);
+      if (cancelled) return;
       setConnectionsLoading(false);
+      if (!visibleConnections) return;
 
       // Always fetch fresh quota on mount, no cache display
       setLoading(buildLoadingState(visibleConnections));
@@ -576,10 +599,14 @@ export default function ProviderLimits() {
       await Promise.all(
         visibleConnections.map((conn) => fetchQuota(conn.id, conn.provider)),
       );
+      if (cancelled) return;
       setLastUpdated(new Date());
     };
 
     initializeData();
+    return () => {
+      cancelled = true;
+    };
   }, [fetchConnections, fetchQuota, page]);
 
   useEffect(() => {
@@ -701,7 +728,7 @@ export default function ProviderLimits() {
   const sortedConnections = useMemo(
     () =>
       sortVisibleConnections(
-        connections,
+        scopeConnectionsToProvider(connections, providerFilter),
         quotaData,
         expiringFirst,
         providerFilter,
