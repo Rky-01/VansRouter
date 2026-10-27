@@ -93,11 +93,12 @@ describe("Claude JSON clients behind forced-stream upstreams", () => {
   it("reuses the same conversion for ordinary non-streaming Chat responses", () => {
     const json = translateNonStreamingResponse({
       id: "chatcmpl_test",
-      model: "test-model",
+      model: "upstream-model",
       choices: [{ message: { content: "unchanged" }, finish_reason: "stop" }],
       usage: { prompt_tokens: 3, completion_tokens: 1 }
-    }, FORMATS.OPENAI, FORMATS.CLAUDE);
+    }, FORMATS.OPENAI, FORMATS.CLAUDE, "claude-requested");
     expect(json.content).toEqual([{ type: "text", text: "unchanged" }]);
     expect(json.stop_reason).toBe("end_turn");
+    expect(json.model).toBe("claude-requested");
   });
 });

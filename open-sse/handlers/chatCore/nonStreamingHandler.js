@@ -19,11 +19,11 @@ import { extractToolNames } from "../../translator/concerns/toolCall.js";
  * Translate non-streaming response body from the provider format to the
  * client format: provider → OpenAI pivot → Claude when the client is Claude.
  */
-export function translateNonStreamingResponse(responseBody, providerFormat, clientFormat) {
+export function translateNonStreamingResponse(responseBody, providerFormat, clientFormat, model = null) {
   if (providerFormat === clientFormat) return responseBody;
   const openaiBody = providerResponseToOpenAI(responseBody, providerFormat);
   return clientFormat === FORMATS.CLAUDE
-    ? openAICompletionToClaudeMessage(openaiBody, openaiBody?.model)
+    ? openAICompletionToClaudeMessage(openaiBody, model || openaiBody?.model)
     : openaiBody;
 }
 
@@ -214,7 +214,7 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, apiKeyInfo, endpoint: clientRawRequest?.endpoint, comboName });
 
   const translatedResponse = needsTranslation(targetFormat, sourceFormat)
-    ? translateNonStreamingResponse(responseBody, targetFormat, sourceFormat)
+    ? translateNonStreamingResponse(responseBody, targetFormat, sourceFormat, model)
     : responseBody;
 
   // translateNonStreamingResponse already returns the client shape, including
