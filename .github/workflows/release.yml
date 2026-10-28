@@ -86,7 +86,12 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ env.GHCR_IMAGE }}:release-${{ github.run_id }}-${{ github.run_attempt }}
+          # Single mutable staging tag, not a unique release-<run_id>-<run_attempt>
+          # one. Nothing downstream reads this tag by name (all verification and
+          # promotion use the Buildx digest), and the `release` concurrency group
+          # serializes runs, so a unique name only accumulated one orphan tag per
+          # release in GHCR. A fixed name keeps registry tag growth bounded.
+          tags: ${{ env.GHCR_IMAGE }}:staging
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cache-from: type=gha,scope=release
           cache-to: type=gha,scope=release,mode=max,ignore-error=true,timeout=5m

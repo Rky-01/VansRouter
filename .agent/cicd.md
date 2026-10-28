@@ -81,6 +81,7 @@ The `--pretag` command checks the changelog-only commit before the tag exists. A
 - The build must use `pnpm install --frozen-lockfile` with the repository lockfile. The native dependency stage must use its committed `docker/native-deps/package-lock.json` and `npm ci --ignore-scripts`; the target-specific `better-sqlite3` musl binary is downloaded separately for the pinned Node ABI and SHA-256 verified before use.
 - Node/Alpine base images and external Tailscale archives are digest/checksum pinned; the bundled Tailscale release is kept current.
 - The image must retain provenance and SBOM attestations, and the release workflow must promote the exact Buildx digest rather than a mutable staging tag. Registry inspection errors are fatal; only an explicit not-found result permits tag creation.
+- The staging image is pushed under the single fixed tag `ghcr.io/vanszs/vansrouter:staging`, never a unique `release-<run_id>-<run_attempt>` tag. Nothing reads the staging tag by name (verification and promotion use the digest) and the `release` concurrency group serializes runs, so per-run tags only accumulated orphan tags in GHCR. Tag growth must stay bounded.
 - The image smoke test must force a platform-specific pull, start the published image, and verify `/api/ready`, `/api/health`, and `/api/version` on both `linux/amd64` and `linux/arm64`.
 
 ## CI Gates
