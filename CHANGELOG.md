@@ -1,3 +1,88 @@
+# v0.91.85 (2026-10-29)
+
+Version numbers 0.91.82, 0.91.83 and 0.91.84 were never tagged and never
+released; this release follows v0.91.81 directly. The date gap is real, the
+version gap is not: nothing was published under those numbers.
+
+## Fixed
+
+- **Provider limits could show the wrong provider.** A quota refresh started
+  before a filter change could resolve after it and overwrite the filtered
+  list, so selecting Antigravity and refreshing sometimes rendered Codex rows
+  while the filter still said Antigravity. Connection fetches are now
+  latest-wins, `initializeData` is cancelled on effect cleanup, `refreshAll` is
+  guarded by a ref, and the rendered rows are scoped to the active provider as
+  a final invariant. The dashboard also follows URL provider changes after
+  mount and marks connection/quota reads `no-store`. Reproduced with a delayed
+  unfiltered response; a regression test covers the tracker and the scoping.
+- **Non-streaming Claude responses named the wrong model.** The provider →
+  OpenAI pivot → Claude path passed `openaiBody.model`, so a client asking for
+  one model could get a response that named another (or none). The requested
+  model is now threaded through `translateNonStreamingResponse`.
+- **Claude non-streaming conversion alignment.** OpenAI finish reasons are
+  mapped through `fromOpenAIFinish`, so forced SSE → JSON Claude clients get
+  `max_tokens` instead of an invalid `length`. The OpenAI → Claude completion
+  converter lives in `translator/concerns` and returns the client shape.
+  `context_management` is stripped for non-Anthropic Claude transports, which
+  rejected it with a 400. Blank thinking blocks are dropped while
+  `redacted_thinking` is preserved.
+- **Vercel and Cloudflare relay deploy modals crashed the proxy-pools page**
+  (issue #185). `RelayDeployModal` read `tokenSteps.length` unconditionally
+  although only the Deno and Netlify call sites pass the prop, and PropTypes
+  already marked it optional; the component now defaults it to `[]`. The
+  Vercel and Cloudflare modals render again, and the token-steps section stays
+  hidden for an empty pool.
+- **CodeBuddy Intl rejected every request with HTTP 400 code 11128**
+  ("conversation id missing"). The intl gateway now requires the
+  `X-Conversation-*` header family the official IDE sends on every turn, so
+  `CodeBuddyIntlExecutor` derives a stable RFC-4122-v5-shaped conversation id
+  from the client's session key (falling back to the opening user message,
+  then a random UUID) and adds fresh request and message ids. Verified A/B
+  against the live upstream: same credentials and body, headers absent →
+  11128, headers present → 200 SSE. `codebuddy-cn` is not gated yet and is
+  unchanged.
+
+## Release engineering
+
+- **npm publish no longer fails its own verification.** The registry accepts a
+  publish before the version is readable; v0.91.81's post-publish check failed
+  after 12 attempts × 5 s even though the version appeared about nine minutes
+  later with the expected integrity. The verify loop now polls 60 times at
+  15 s (bounded at ~15 minutes), the job timeout is 25 minutes so the wait
+  cannot outlive it, and a version that lands between the lookup and the
+  publish call (`403 previously published versions`) is settled by matching
+  the integrity instead of failing a release that did publish.
+- **GHCR stops accumulating one orphan tag per release.** The build pushed a
+  unique `release-<run_id>-<run_attempt>` staging tag, but nothing reads the
+  staging tag by name — manifest verification, SQLite inspection, both
+  platform smoke tests and digest promotion all use the Buildx digest, and the
+  `release` concurrency group serializes runs. The staging image is now pushed
+  under the single fixed tag `ghcr.io/vanszs/vansrouter:staging`, and the
+  invariant is recorded in `.agent/cicd.md`.
+
+## Tests
+
+- Full suite: 445 test files, 4733 tests passed, 121 skipped, 1 todo
+  (`CI=true pnpm test`, exit 0).
+- New regression tests: quota latest-wins tracker and provider scoping (4),
+  Claude non-streaming model echo, Claude context-management/empty-thinking
+  handling, CodeBuddy Intl conversation headers (5 cases), the
+  proxy-pools modal with omitted/populated/empty `tokenSteps`, and the npm
+  visibility window in the release workflow contract.
+- `pnpm run lint` exit 0 (0 errors); `node scripts/lint-undef.cjs` and
+  `node scripts/lint-reacthooks.cjs` clean.
+- Production build: `SKIP_PREBUILD_LINT=1 pnpm build` exit 0, `✅ build
+  complete`, `.next/standalone/server.js` emitted.
+
+## Known follow-ups
+
+- The 20 per-run `release-*` tags that GHCR accumulated before this fix are
+  still present. Removing them needs a token with `read:packages` and
+  `delete:packages` and must be done **per tag, never per package version**:
+  `0.91.81`, `latest` and `release-39924972292-1` share one digest, so deleting
+  the version would destroy a real release. This fix stops the growth; it does
+  not clean the backlog.
+
 # v0.91.81 (2026-10-23)
 
 The `v0.91.80` tag points at a commit on `main`, but that tag never produced a
